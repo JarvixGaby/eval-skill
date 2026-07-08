@@ -151,20 +151,6 @@ eval-skills/
 └── comparison_report.html
 ```
 
-不要提交这些生成物：
-
-```text
-temp/
-comparison_report.html
-benchmark.json
-benchmark.md
-scenario-*/
-target-skill/
-__pycache__/
-.DS_Store
-node_modules/
-```
-
 ## 核心优势
 
 - **先和 baseline 对比**：不是只看目标 Skill 自己的声明，而是和“直接让 Agent 做”比较。
@@ -236,4 +222,3 @@ python3 scripts/generate_comparison_report.py <workspace>/temp \
 - 默认避免外部副作用。如果目标 Skill 会发邮件、部署服务、写入 SaaS、购买、删除或改变真实状态，除非用户明确批准，否则使用 sandbox 或 dry-run 场景。
 - 这个 Skill 产出的是证据，不是绝对结论。报告应清楚写明 blind level、limitations 和 residual risks。
 - 最终报告是静态 HTML，可以本地打开，也可以作为 artifact 分享。
-

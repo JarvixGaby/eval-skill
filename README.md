@@ -155,20 +155,6 @@ Generated evaluation files are kept out of the repository. A normal run creates:
 └── comparison_report.html
 ```
 
-Do not commit generated artifacts:
-
-```text
-temp/
-comparison_report.html
-benchmark.json
-benchmark.md
-scenario-*/
-target-skill/
-__pycache__/
-.DS_Store
-node_modules/
-```
-
 ## Core Advantages
 
 - **Baseline comparison first**: the target skill is compared against a baseline
@@ -263,4 +249,3 @@ python3 scripts/generate_comparison_report.py <workspace>/temp \
   its blind level, limitations, and residual risks.
 - The final report is static HTML and can be opened locally or shared as an
   artifact.
-
