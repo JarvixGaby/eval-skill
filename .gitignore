@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Evaluation workspaces and generated reports
+temp/
+comparison_report.html
+benchmark.json
+benchmark.md
+
+# Local dependency folders created by target skills during evals
+node_modules/
+
