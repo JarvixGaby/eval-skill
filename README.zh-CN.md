@@ -2,12 +2,12 @@
 
 [English README](./README.md)
 
-`eval-skills` 是一个用于评估其他 Agent Skill 是否真的有用的 Skill。它会把目标 Skill 变成一个小型基准测试：生成真实场景、分别运行“使用 Skill”和“不使用 Skill”的版本、给结果打分、聚合指标，并生成一份并排对比的 HTML 报告。
+`eval-skills` 是一个用于评估 Agent Skill 是否真的有用的 Skill。它会把一个或多个目标 Skill 变成小型基准测试：生成真实场景、运行 baseline 或 skill-vs-skill 配置、给结果打分、聚合指标，并生成一份并排对比的 HTML 报告。
 
 它要回答的问题不是“这个 Skill 自己说得好不好”，而是：
 
 ```text
-和直接让 Agent 做相比，这个 Skill 是否真的改善了结果？
+和直接让 Agent 做相比，这个 Skill 是否真的改善了结果？或者两个候选 Skill 谁更好？
 ```
 
 ## 安装方式
@@ -47,12 +47,19 @@ git clone https://github.com/JarvixGaby/eval-skill ~/.codex/skills/eval-skills
 
 ## Skill 使用方法
 
-让 Agent 使用 `eval-skills`，并提供你想评估的目标 Skill 来源。
+让 Agent 使用 `eval-skills`，并提供你想评估的目标 Skill 来源；也可以一次提供多个候选 Skill 来源。
 
 示例：
 
 ```text
 Use eval-skills to evaluate https://github.com/example/example-skill.
+```
+
+两个 Skill 互测示例：
+
+```text
+Use eval-skills to compare /path/to/skill-one and /path/to/skill-two.
+Do not include a naked baseline.
 ```
 
 你可以提供以下任意一种目标来源：
@@ -62,20 +69,31 @@ Use eval-skills to evaluate https://github.com/example/example-skill.
 - `.skill` 压缩包。
 - 一条安装命令。
 - 粘贴的 `SKILL.md` 内容，以及它引用的文件。
+- 已注册 Skill 的名称。
+
+如果你要求评估但没有提供任何 Skill source，Agent 应该先提醒你提供上面任意一种来源，然后再开始生成场景或创建 workspace。
+
+如果你只提供了一个目标，Agent 应该先问你要和什么对比：
+
+- 裸模型 baseline，也就是不使用任何 Skill。
+- 另一个已注册 Skill，用已安装的 skill name 指定。
+- 另一个未注册 Skill 来源，例如 GitHub URL、本地目录、`.skill` 压缩包、安装命令或粘贴文件。
+
+如果你已经提供了两个或更多 Skill 来源，或者明确说不要加入裸模型 baseline，Agent 应该直接进入 skill-vs-skill 对比。
 
 用户通常只需要提供：
 
-- 目标 Skill 的来源。
+- 目标 Skill 的来源，或多个候选 Skill 的来源。
 - 哪些能力想测，或者哪些内容不要测。
 - 如果目标 Skill 依赖真实输入文件，可以提供这些文件。
 - 是否允许外部副作用。默认不允许。
 
 之后 `eval-skills` 会：
 
-1. 把目标 Skill 克隆或复制到 `temp/target-skill/`。
-2. 阅读目标 Skill，分析能力范围。
-3. 根据目标 Skill 的真实用途生成测试场景。
-4. 对每个场景分别运行 with-skill 和 baseline。
+1. 把目标 Skill 克隆或复制到 `temp/target-skill/`；多个候选 Skill 放到 `temp/target-skills/<configuration-name>/`。
+2. 阅读目标 Skill 或候选 Skill，分析能力范围。
+3. 根据目标 Skill 的真实用途，或多个候选 Skill 的共同能力范围生成测试场景。
+4. 对每个场景运行所有 configuration。
 5. 对每次 run 打分。
 6. 对 Version A 和 Version B 做盲对比。
 7. 聚合结果。
@@ -94,10 +112,9 @@ Use eval-skills to evaluate https://github.com/example/example-skill.
 
 每个场景都会运行：
 
-- 使用目标 Skill：3 次。
-- 不使用目标 Skill：3 次。
+- 每个 configuration：3 次。
 
-HTML 报告必须展示 Version A 的 3 次 run 和 Version B 的 3 次 run。不能只展示最好的一次、第一次，或者用平均摘要替代真实输出。
+如果是 baseline 对比，configuration 通常是 `with_skill` 和 `without_skill`。如果是两个 Skill 互测且不加入裸模型 baseline，可以使用 `skill_one`、`skill_two` 这样的名称。HTML 报告必须展示每个 blinded version 的 3 次 run。不能只展示最好的一次、第一次，或者用平均摘要替代真实输出。
 
 ## 目录结构
 
@@ -134,6 +151,7 @@ eval-skills/
 <workspace>/
 ├── temp/
 │   ├── target-skill/
+│   ├── target-skills/
 │   ├── target_skill_source.json
 │   ├── skill_profile.json
 │   ├── scenario_set.json
@@ -153,9 +171,9 @@ eval-skills/
 
 ## 核心优势
 
-- **先和 baseline 对比**：不是只看目标 Skill 自己的声明，而是和“直接让 Agent 做”比较。
+- **baseline 或 skill-vs-skill 对比**：不是只看目标 Skill 自己的声明，而是和裸模型 baseline 或其他候选 Skill 比较。
 - **自动生成真实场景**：测试 prompt 来自目标 Skill 的 description、workflow 和常见用途。
-- **隔离目标 Skill**：默认把目标 Skill 当作本地 artifact，不安装到全局，降低 baseline 污染风险。
+- **隔离目标 Skill**：默认把目标 Skill 当作本地 artifact，不安装到全局，降低配置之间互相污染的风险。
 - **固定 3 次 run**：每个配置重复 3 次，让失败和波动可见。
 - **工作区校验**：`validate_workspace.py` 会在报告前检查目录、JSON、run 数量和输出是否齐全。
 - **并排 HTML 报告**：把 A/B 输出嵌入同一个静态 HTML，方便直接比较。
@@ -167,22 +185,22 @@ eval-skills/
 `eval-skills` 把一个 Skill 当作黑盒产品来评估。
 
 1. **获取并隔离目标 Skill**  
-   目标 Skill 会被克隆或复制到 `temp/target-skill/`。默认不安装到全局 skills 目录，因为全局安装可能污染 baseline。
+   目标 Skill 会被克隆或复制到 `temp/target-skill/`；多个候选 Skill 可以放到 `temp/target-skills/<configuration-name>/`。默认不安装到全局 skills 目录，因为全局安装可能污染对比。
 
 2. **分析目标 Skill**  
    `scripts/analyze_skill.py` 会读取 `SKILL.md` 和 bundled resources，生成第一版 `skill_profile.json`。Agent 仍然需要自己阅读目标 Skill，并在必要时修正这个 profile。
 
 3. **生成测试场景**  
-   Agent 根据目标 Skill 声称的能力和真实用法生成场景。prompt 本身应该能自然触发目标 Skill 的 intended trigger surface，因此默认不单独做 trigger test。
+   Agent 根据目标 Skill 声称的能力和真实用法生成场景；如果是多个候选 Skill，则基于它们共同覆盖的能力范围生成场景。prompt 本身应该能自然触发 intended trigger surface，因此默认不单独做 trigger test。
 
-4. **分别运行 with-skill 和 baseline**  
-   每个场景会随机分配 Version A 和 Version B。一个版本拿到 Skill path，另一个版本只拿到任务 prompt 和 fixtures。
+4. **运行所有 configuration**  
+   每个场景会随机分配 Version A 和 Version B。baseline 对比时，一个版本拿到 Skill path，另一个版本只拿到任务 prompt 和 fixtures；两个 Skill 互测时，每个版本只拿到自己对应的 Skill path。
 
 5. **清洗与打分**  
    用户可见的最终输出进入 `outputs/`，过程痕迹保留在 `raw_outputs/`。每次 run 都会按场景 expectations 打分。
 
 6. **盲对比与揭盲分析**  
-   comparator 先只看 Version A/B 的清洗后输出，不看身份。对比完成后再揭盲，分析 Skill 为什么有帮助或没有帮助。
+   comparator 先只看 blinded versions 的清洗后输出，不看身份。对比完成后再揭盲，分析哪个 configuration 更好以及原因。
 
 7. **校验、聚合、生成报告**  
    先校验 workspace，再聚合 benchmark，最后生成静态 `comparison_report.html`。

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate a true side-by-side comparison HTML report for eval-skills.
+Generate a side-by-side comparison HTML report for eval-skills.
 
 Unlike skill-creator's eval-viewer (which shows one run at a time with
 prev/next navigation -- built for iterative authoring, not A/B reading),
-this produces a single static HTML file where, for each scenario, both
-versions render in two columns side by side, labels blinded by default
-("Version A" / "Version B") with a per-scenario reveal toggle, plus a
-top-level verdict card.
+this produces a single static HTML file where, for each scenario, every
+version renders in blinded columns ("Version A", "Version B", ...), with a
+per-scenario reveal toggle and a top-level verdict card.
 
 Usage:
     python generate_comparison_report.py <workspace>/temp --skill-name <name> --out <workspace>/comparison_report.html
@@ -18,6 +17,7 @@ Expects the eval-skills workspace layout:
     <workspace>/temp/scenario-<id>/eval_metadata.json
     <workspace>/temp/scenario-<id>/version_a/run-1..3/outputs/*  (+ grading.json, transcript.md)
     <workspace>/temp/scenario-<id>/version_b/run-1..3/outputs/*  (+ grading.json, transcript.md)
+    <workspace>/temp/scenario-<id>/version_c/run-1..3/outputs/*  (optional)
     <workspace>/temp/scenario-<id>/comparison.json       (optional, blind judge verdict)
     <workspace>/temp/evaluation_context.json             (optional evidence-strength metadata)
 
@@ -126,6 +126,43 @@ def run_sort_key(p: Path) -> tuple[int, str]:
         return (10**9, p.name)
 
 
+def version_sort_key(p: Path) -> tuple[int, str]:
+    suffix = p.name.removeprefix("version_")
+    if len(suffix) == 1 and suffix.isalpha():
+        return (ord(suffix.lower()) - ord("a"), p.name)
+    return (10**6, p.name)
+
+
+def version_label(version_name: str) -> str:
+    suffix = version_name.removeprefix("version_")
+    if len(suffix) == 1 and suffix.isalpha():
+        return f"Version {suffix.upper()}"
+    return version_name.replace("_", " ").title()
+
+
+def version_key_for_winner(winner):
+    if not winner:
+        return None
+    winner = str(winner).strip()
+    if len(winner) == 1 and winner.isalpha():
+        return f"version_{winner.lower()}"
+    if winner.startswith("version_"):
+        return winner
+    return None
+
+
+def version_dirs_for_scenario(scenario_dir: Path, mapping: dict) -> list[Path]:
+    names: list[str] = []
+    if isinstance(mapping, dict):
+        names.extend(name for name in mapping if name.startswith("version_"))
+    names.extend(
+        d.name for d in sorted(scenario_dir.glob("version_*"), key=version_sort_key)
+        if d.is_dir()
+    )
+    deduped = list(dict.fromkeys(names))
+    return [scenario_dir / name for name in deduped if (scenario_dir / name).is_dir()]
+
+
 def run_dirs_for_version(version_dir: Path) -> list[Path]:
     explicit_runs = sorted(
         (
@@ -183,31 +220,42 @@ def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict)
     eval_name = meta.get("eval_name", sid)
     comparison = load_json(scenario_dir / "comparison.json")
 
-    mapping = label_map.get(sid, {})  # e.g. {"version_a": "with_skill", "version_b": "without_skill"}
+    mapping = label_map.get(sid, {})  # e.g. {"version_a": "pdf_skill", "version_b": "doc_skill"}
+    version_dirs = version_dirs_for_scenario(scenario_dir, mapping)
 
-    col_a = build_column(scenario_dir / "version_a", "Version A")
-    col_b = build_column(scenario_dir / "version_b", "Version B")
+    columns = "".join(build_column(version_dir, version_label(version_dir.name)) for version_dir in version_dirs)
+    if not columns:
+        columns = '<div class="unsupported-note">No version directories found for this scenario.</div>'
 
     reveal_html = ""
     if mapping:
-        a_real = mapping.get("version_a", "?")
-        b_real = mapping.get("version_b", "?")
+        reveal_text = "  |  ".join(
+            f"{version_label(version_name)} = {config}"
+            for version_name, config in sorted(mapping.items())
+            if version_name.startswith("version_")
+        )
         reveal_html = (
-            f'<div class="reveal" data-a="{escape(a_real)}" data-b="{escape(b_real)}">'
-            f'<button class="reveal-btn" onclick="revealLabels(this)">Reveal which used the skill</button>'
+            f'<div class="reveal" data-labels="{escape_attr(reveal_text)}">'
+            f'<button class="reveal-btn" onclick="revealLabels(this)">Reveal configurations</button>'
             f'<span class="reveal-result" style="display:none"></span></div>'
         )
 
     verdict_html = ""
     if comparison:
         winner = comparison.get("winner", "?")
+        winner_label = version_label(version_key_for_winner(winner) or str(winner))
         reasoning = comparison.get("reasoning", "")
         oq = comparison.get("output_quality", {})
-        a_score = oq.get("A", {}).get("score", "—")
-        b_score = oq.get("B", {}).get("score", "—")
+        score_bits = []
+        for version_dir in version_dirs:
+            label = version_label(version_dir.name)
+            letter = label.removeprefix("Version ")
+            score = oq.get(letter, {}).get("score", "—")
+            score_bits.append(f"{label}: {score}/10")
+        score_text = ", ".join(score_bits)
         verdict_html = (
-            f'<details class="verdict"><summary>Blind judge verdict: Version {winner} '
-            f'(A: {a_score}/10, B: {b_score}/10)</summary>'
+            f'<details class="verdict"><summary>Blind judge verdict: {escape(winner_label)}'
+            f' ({escape(score_text)})</summary>'
             f'<p class="reasoning">{escape(reasoning)}</p></details>'
         )
 
@@ -215,7 +263,7 @@ def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict)
     <section class="scenario">
       <h2>{escape(eval_name)}</h2>
       <div class="prompt-block"><strong>Prompt:</strong> {escape(prompt)}</div>
-      <div class="columns">{col_a}{col_b}</div>
+      <div class="columns">{columns}</div>
       {verdict_html}
       {reveal_html}
     </section>
@@ -224,26 +272,32 @@ def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict)
 
 def build_summary_card(skill_name: str, scenario_dirs: list, label_map: dict, context: dict) -> str:
     total = len(scenario_dirs)
-    wins_with_skill = 0
+    wins_by_config: dict[str, int] = {}
     scored = 0
     for sd in scenario_dirs:
         comparison = load_json(sd / "comparison.json")
         mapping = label_map.get(sd.name, {})
         if comparison and mapping:
-            scored += 1
-            winner_letter = comparison.get("winner")
-            winner_config = mapping.get(f"version_{winner_letter.lower()}") if winner_letter in ("A", "B") else None
-            if winner_config == "with_skill":
-                wins_with_skill += 1
+            winner_key = version_key_for_winner(comparison.get("winner"))
+            winner_config = mapping.get(winner_key) if winner_key else None
+            if winner_config:
+                scored += 1
+                wins_by_config[winner_config] = wins_by_config.get(winner_config, 0) + 1
     verdict = "No comparison data yet"
     if scored:
-        pct = wins_with_skill / scored
-        if pct >= 0.6:
-            verdict = f"The skill helped in {wins_with_skill}/{scored} scenarios"
-        elif pct <= 0.4:
-            verdict = f"The skill did NOT clearly help -- won only {wins_with_skill}/{scored} scenarios"
+        leader, leader_wins = sorted(wins_by_config.items(), key=lambda item: (-item[1], item[0]))[0]
+        if "with_skill" in wins_by_config:
+            wins_with_skill = wins_by_config.get("with_skill", 0)
+            pct = wins_with_skill / scored
+            if pct >= 0.6:
+                verdict = f"The skill helped in {wins_with_skill}/{scored} scenarios"
+            elif pct <= 0.4:
+                verdict = f"The skill did NOT clearly help -- won only {wins_with_skill}/{scored} scenarios"
+            else:
+                verdict = f"Mixed result -- the skill won {wins_with_skill}/{scored} scenarios"
         else:
-            verdict = f"Mixed result -- the skill won {wins_with_skill}/{scored} scenarios"
+            win_text = ", ".join(f"{config}: {wins}" for config, wins in sorted(wins_by_config.items()))
+            verdict = f"Top configuration: {leader} ({leader_wins}/{scored} wins). Wins: {win_text}"
     chips = [
         ("Blind level", context.get("blind_level", "unknown")),
         ("Sampling", context.get("sampling_mode", "unknown")),
@@ -282,8 +336,8 @@ body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; 
 .scenario { background: #fff; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .scenario h2 { margin-top: 0; font-size: 1.15rem; }
 .prompt-block { background: #f0f2f5; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.92rem; }
-.columns { display: flex; gap: 1.5rem; align-items: flex-start; }
-.column { flex: 1; min-width: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; }
+.columns { display: flex; gap: 1.5rem; align-items: flex-start; overflow-x: auto; }
+.column { flex: 1 0 22rem; min-width: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; }
 .column-label { font-weight: 700; color: #555; margin-bottom: 0.75rem; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.04em; }
 .run-count { float: right; color: #888; font-weight: 600; letter-spacing: 0; text-transform: none; }
 .file-block { margin-bottom: 1rem; }
@@ -315,10 +369,9 @@ body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; 
 JS = '''
 function revealLabels(btn) {
   const wrap = btn.parentElement;
-  const a = wrap.getAttribute("data-a");
-  const b = wrap.getAttribute("data-b");
+  const labels = wrap.getAttribute("data-labels");
   const result = wrap.querySelector(".reveal-result");
-  result.textContent = "Version A = " + a + "  |  Version B = " + b;
+  result.textContent = labels;
   result.style.display = "inline";
   btn.disabled = true;
 }

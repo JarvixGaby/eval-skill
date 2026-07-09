@@ -4,7 +4,8 @@ Aggregate individual run results into benchmark summary statistics.
 
 Reads grading.json files from run directories and produces:
 - run_summary with mean, stddev, min, max for each metric
-- delta between with_skill and without_skill configurations
+- delta between with_skill and without_skill configurations when present, or
+  the first two discovered configurations for multi-skill comparisons
 
 Usage:
     python aggregate_benchmark.py <workspace>/temp
@@ -106,6 +107,26 @@ def run_dirs_for_version(version_dir: Path) -> list[Path]:
     return []
 
 
+def version_sort_key(p: Path) -> tuple[int, str]:
+    suffix = p.name.removeprefix("version_")
+    if len(suffix) == 1 and suffix.isalpha():
+        return (ord(suffix.lower()) - ord("a"), p.name)
+    return (10**6, p.name)
+
+
+def version_dirs_for_scenario(scenario_dir: Path, mapping: dict) -> list[Path]:
+    """Return version directories from label_key first, with filesystem fallback."""
+    names: list[str] = []
+    if isinstance(mapping, dict):
+        names.extend(name for name in mapping if name.startswith("version_"))
+    names.extend(
+        d.name for d in sorted(scenario_dir.glob("version_*"), key=version_sort_key)
+        if d.is_dir()
+    )
+    deduped = list(dict.fromkeys(names))
+    return [scenario_dir / name for name in deduped if (scenario_dir / name).is_dir()]
+
+
 def result_from_run(eval_id, config: str, run_number: int, run_dir: Path, grading: dict) -> dict:
     result = {
         "eval_id": eval_id,
@@ -156,10 +177,8 @@ def load_scenario_results(benchmark_dir: Path) -> dict:
         eval_id = metadata.get("eval_id", metadata.get("id", idx))
         mapping = label_key.get(scenario_dir.name, {})
 
-        for version_name in ("version_a", "version_b"):
-            version_dir = scenario_dir / version_name
-            if not version_dir.is_dir():
-                continue
+        for version_dir in version_dirs_for_scenario(scenario_dir, mapping):
+            version_name = version_dir.name
             config = mapping.get(version_name, version_name)
             results.setdefault(config, [])
 
@@ -374,10 +393,6 @@ def generate_markdown(benchmark: dict) -> str:
 
     # Determine config names (excluding "delta")
     configs = [k for k in run_summary if k != "delta"]
-    config_a = configs[0] if len(configs) >= 1 else "config_a"
-    config_b = configs[1] if len(configs) >= 2 else "config_b"
-    label_a = config_a.replace("_", " ").title()
-    label_b = config_b.replace("_", " ").title()
 
     lines = [
         f"# Skill Benchmark: {metadata['skill_name']}",
@@ -388,28 +403,33 @@ def generate_markdown(benchmark: dict) -> str:
         "",
         "## Summary",
         "",
-        f"| Metric | {label_a} | {label_b} | Delta |",
-        "|--------|------------|---------------|-------|",
+        "| Configuration | Pass Rate | Time | Tokens |",
+        "|---------------|-----------|------|--------|",
     ]
 
-    a_summary = run_summary.get(config_a, {})
-    b_summary = run_summary.get(config_b, {})
-    delta = run_summary.get("delta", {})
+    for config in configs:
+        summary = run_summary.get(config, {})
+        label = config.replace("_", " ").title()
+        pass_rate = summary.get("pass_rate", {})
+        time_seconds = summary.get("time_seconds", {})
+        tokens = summary.get("tokens", {})
+        lines.append(
+            f"| {label} | "
+            f"{pass_rate.get('mean', 0)*100:.0f}% ± {pass_rate.get('stddev', 0)*100:.0f}% | "
+            f"{time_seconds.get('mean', 0):.1f}s ± {time_seconds.get('stddev', 0):.1f}s | "
+            f"{tokens.get('mean', 0):.0f} ± {tokens.get('stddev', 0):.0f} |"
+        )
 
-    # Format pass rate
-    a_pr = a_summary.get("pass_rate", {})
-    b_pr = b_summary.get("pass_rate", {})
-    lines.append(f"| Pass Rate | {a_pr.get('mean', 0)*100:.0f}% ± {a_pr.get('stddev', 0)*100:.0f}% | {b_pr.get('mean', 0)*100:.0f}% ± {b_pr.get('stddev', 0)*100:.0f}% | {delta.get('pass_rate', '—')} |")
-
-    # Format time
-    a_time = a_summary.get("time_seconds", {})
-    b_time = b_summary.get("time_seconds", {})
-    lines.append(f"| Time | {a_time.get('mean', 0):.1f}s ± {a_time.get('stddev', 0):.1f}s | {b_time.get('mean', 0):.1f}s ± {b_time.get('stddev', 0):.1f}s | {delta.get('time_seconds', '—')}s |")
-
-    # Format tokens
-    a_tokens = a_summary.get("tokens", {})
-    b_tokens = b_summary.get("tokens", {})
-    lines.append(f"| Tokens | {a_tokens.get('mean', 0):.0f} ± {a_tokens.get('stddev', 0):.0f} | {b_tokens.get('mean', 0):.0f} ± {b_tokens.get('stddev', 0):.0f} | {delta.get('tokens', '—')} |")
+    delta = run_summary.get("delta")
+    if delta:
+        lines.extend([
+            "",
+            "Delta is computed as `with_skill - without_skill` when those configurations exist; otherwise it uses the first two discovered configurations.",
+            "",
+            f"- Pass rate: {delta.get('pass_rate', '—')}",
+            f"- Time: {delta.get('time_seconds', '—')}s",
+            f"- Tokens: {delta.get('tokens', '—')}",
+        ])
 
     # Notes section
     if benchmark.get("notes"):

@@ -30,6 +30,13 @@ REQUIRED_RUN_FILES = [
 ]
 
 
+def version_sort_key(p: Path) -> tuple[int, str]:
+    suffix = p.name.removeprefix("version_")
+    if len(suffix) == 1 and suffix.isalpha():
+        return (ord(suffix.lower()) - ord("a"), p.name)
+    return (10**6, p.name)
+
+
 def load_json(path: Path, errors: list[str]):
     if not path.exists():
         errors.append(f"Missing required file: {path}")
@@ -59,6 +66,17 @@ def check_run_dir(run_dir: Path, errors: list[str]):
             errors.append(f"Missing run file: {p}")
         elif p.suffix == ".json":
             load_json(p, errors)
+
+
+def version_names_for_scenario(scenario_dir: Path, mapping) -> list[str]:
+    names: list[str] = []
+    if isinstance(mapping, dict):
+        names.extend(name for name in mapping if name.startswith("version_"))
+    names.extend(
+        d.name for d in sorted(scenario_dir.glob("version_*"), key=version_sort_key)
+        if d.is_dir()
+    )
+    return list(dict.fromkeys(names))
 
 
 def validate(workspace: Path) -> tuple[list[str], list[str]]:
@@ -103,14 +121,22 @@ def validate(workspace: Path) -> tuple[list[str], list[str]]:
         mapping = label_key.get(scenario_name)
         if not isinstance(mapping, dict):
             errors.append(f"label_key.json missing mapping for {scenario_name}")
+            mapping = {}
         else:
-            for version in ("version_a", "version_b"):
-                if mapping.get(version) not in {"with_skill", "without_skill"}:
-                    errors.append(
-                        f"label_key.json {scenario_name}.{version} must be with_skill or without_skill"
-                    )
+            version_keys = [k for k in mapping if k.startswith("version_")]
+            configs = [mapping.get(k) for k in version_keys]
+            if len(version_keys) < 2:
+                errors.append(f"label_key.json {scenario_name} must map at least two version_* entries")
+            if any(not isinstance(config, str) or not config for config in configs):
+                errors.append(f"label_key.json {scenario_name} version mappings must be non-empty strings")
+            if len(set(configs)) != len(configs):
+                errors.append(f"label_key.json {scenario_name} must not assign the same configuration twice")
 
-        for version in ("version_a", "version_b"):
+        version_names = version_names_for_scenario(scenario_dir, mapping)
+        if len(version_names) < 2:
+            errors.append(f"{scenario_dir} must contain at least two version_* directories")
+
+        for version in version_names:
             version_dir = scenario_dir / version
             if not version_dir.is_dir():
                 errors.append(f"Missing version directory: {version_dir}")

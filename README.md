@@ -2,14 +2,14 @@
 
 [中文文档](./README.zh-CN.md)
 
-`eval-skills` is an agent skill for evaluating whether another reusable agent
-skill actually improves outcomes. It turns a target skill into a small benchmark:
-realistic scenarios, with-skill vs baseline runs, graded outputs, aggregate
-metrics, and one side-by-side HTML report.
+`eval-skills` is an agent skill for evaluating whether reusable agent skills
+actually improve outcomes. It turns one or more target skills into a small
+benchmark: realistic scenarios, baseline or skill-vs-skill runs, graded outputs,
+aggregate metrics, and one side-by-side HTML report.
 
 The goal is not to prove a skill's claims. The goal is to answer a practical
 question: "Does this skill help on realistic tasks compared with asking the
-agent directly?"
+agent directly, or does one candidate skill outperform another?"
 
 ## Installation
 
@@ -49,12 +49,20 @@ directory. The repository root should contain `SKILL.md`.
 
 ## How To Use
 
-Ask your agent to use `eval-skills` and provide the target skill source.
+Ask your agent to use `eval-skills` and provide the target skill source or
+multiple target skill sources.
 
 Example:
 
 ```text
 Use eval-skills to evaluate https://github.com/example/example-skill.
+```
+
+Skill-vs-skill example:
+
+```text
+Use eval-skills to compare /path/to/skill-one and /path/to/skill-two.
+Do not include a naked baseline.
 ```
 
 You can provide any of these as the target:
@@ -64,20 +72,37 @@ You can provide any of these as the target:
 - A `.skill` archive.
 - A documented install command.
 - Pasted `SKILL.md` content plus referenced files.
+- The name of an already registered skill.
+
+If you ask for an evaluation but do not provide any skill source, the agent
+should ask you to provide one of the source types above before it starts
+building scenarios or a workspace.
+
+If you provide only one target, the agent should ask what to compare it against:
+
+- The naked agent baseline, meaning no skill.
+- Another registered skill, identified by its installed skill name.
+- Another unregistered skill source, such as a GitHub URL, local directory,
+  `.skill` archive, install command, or pasted files.
+
+If you provide two or more skill sources, or explicitly say not to include a
+naked baseline, the agent should run a skill-vs-skill comparison directly.
 
 The user usually only needs to provide:
 
-- The target skill source.
+- The target skill source, or the set of candidate skill sources.
 - Any constraints on what should or should not be tested.
 - Any real input files that matter for the skill, if available.
 - Whether external side effects are allowed. By default, they are not.
 
 The skill will then:
 
-1. Copy or clone the target into `temp/target-skill/`.
-2. Read the target skill and classify its capability areas.
-3. Generate realistic scenario prompts from the target skill's actual use cases.
-4. Run each scenario with the skill and without the skill.
+1. Copy or clone the target into `temp/target-skill/`, or multiple targets into
+   `temp/target-skills/<configuration-name>/`.
+2. Read the target skill or candidate skills and classify capability areas.
+3. Generate realistic scenario prompts from the target skill's actual use cases,
+   or the overlap between candidate skills.
+4. Run each scenario for every configuration.
 5. Grade every run.
 6. Compare blinded Version A vs Version B.
 7. Aggregate results.
@@ -96,12 +121,13 @@ The skill will then:
 
 Each scenario is run:
 
-- 3 times with the target skill.
-- 3 times without the target skill.
+- 3 times per configuration.
 
-The HTML report shows all three runs for Version A and all three runs for
-Version B. It must not hide failed runs, show only the best run, or replace
-real outputs with an average summary.
+For a baseline comparison, the configurations are usually `with_skill` and
+`without_skill`. For a two-skill comparison with no naked baseline, they can be
+names such as `skill_one` and `skill_two`. The HTML report shows all three runs
+for every blinded version. It must not hide failed runs, show only the best run,
+or replace real outputs with an average summary.
 
 ## Directory Structure
 
@@ -138,6 +164,7 @@ Generated evaluation files are kept out of the repository. A normal run creates:
 <workspace>/
 ├── temp/
 │   ├── target-skill/
+│   ├── target-skills/
 │   ├── target_skill_source.json
 │   ├── skill_profile.json
 │   ├── scenario_set.json
@@ -157,12 +184,12 @@ Generated evaluation files are kept out of the repository. A normal run creates:
 
 ## Core Advantages
 
-- **Baseline comparison first**: the target skill is compared against a baseline
-  agent that receives only the task prompt.
+- **Baseline or skill-vs-skill comparison**: the target skill can be compared
+  against a naked baseline or against other candidate skills.
 - **Scenario generation from the skill itself**: prompts are derived from the
   target skill's description, workflow, and likely real use cases.
-- **Isolated target skill**: the target is kept as a local artifact by default,
-  reducing contamination of the baseline run.
+- **Isolated target skills**: targets are kept as local artifacts by default,
+  reducing contamination between configurations.
 - **Standard 3-run sampling**: repeated runs make failures and variance visible.
 - **Workspace validation**: `validate_workspace.py` catches missing run files,
   incomplete scenario folders, and non-standard sampling metadata before report
@@ -179,9 +206,10 @@ Generated evaluation files are kept out of the repository. A normal run creates:
 `eval-skills` treats a skill as a black-box product.
 
 1. **Acquire and isolate**  
-   The target skill is cloned or copied into `temp/target-skill/`. It is not
-   installed globally by default, because global installation can contaminate the
-   baseline.
+   The target skill is cloned or copied into `temp/target-skill/`; multiple
+   candidates can be copied into `temp/target-skills/<configuration-name>/`.
+   They are not installed globally by default, because global installation can
+   contaminate the comparison.
 
 2. **Analyze the target**  
    `scripts/analyze_skill.py` reads `SKILL.md` and bundled resources to produce a
@@ -189,20 +217,23 @@ Generated evaluation files are kept out of the repository. A normal run creates:
    corrects the profile when needed.
 
 3. **Generate scenarios**  
-   The agent creates realistic tasks from the target skill's claimed use cases.
-   The prompts are designed to naturally hit the skill's intended trigger
-   surface, so a separate trigger test is not run by default.
+   The agent creates realistic tasks from the target skill's claimed use cases,
+   or from the common capability area shared by multiple candidate skills. The
+   prompts are designed to naturally hit the intended trigger surface, so a
+   separate trigger test is not run by default.
 
-4. **Run with and without the skill**  
-   For each scenario, Version A and Version B are assigned randomly. One version
-   uses the skill path; the other receives only the task prompt and fixtures.
+4. **Run configurations**  
+   For each scenario, Version A and Version B are assigned randomly. In a
+   baseline comparison, one version uses the skill path and the other receives
+   only the task prompt and fixtures. In a skill-vs-skill comparison, each
+   version receives only its assigned skill path.
 
 5. **Sanitize and grade**  
    Final user-visible outputs are copied into `outputs/`. Scratch traces stay in
    `raw_outputs/`. Each run is graded against the scenario expectations.
 
 6. **Compare and unblind**  
-   A comparator judges Version A vs Version B from sanitized outputs. After that,
+   A comparator judges the blinded versions from sanitized outputs. After that,
    the evaluation is unblinded for analysis.
 
 7. **Validate, aggregate, report**  

@@ -1,12 +1,13 @@
 ---
 name: eval-skills
-description: Evaluate, benchmark, or test-drive an unfamiliar AI agent skill, tool bundle, prompt workflow, or capability package. Use when the user asks whether a downloaded/shared .skill, SKILL.md, agent workflow, or reusable AI capability actually helps, is worth installing, works as advertised, or performs better than asking an agent directly. This skill generates realistic scenarios from the target capability, runs with-capability vs baseline comparisons, records evidence strength, controls for leakage and side effects, and produces a side-by-side HTML report.
+description: Evaluate, benchmark, or test-drive an unfamiliar AI agent skill, tool bundle, prompt workflow, or capability package. Use when the user asks whether a downloaded/shared .skill, SKILL.md, agent workflow, or reusable AI capability actually helps, is worth installing, works as advertised, performs better than asking an agent directly, or performs better than another skill. This skill generates realistic scenarios from the target capability, runs baseline or multi-skill comparisons, records evidence strength, controls for leakage and side effects, and produces a side-by-side HTML report.
 ---
 
 # Eval Skills
 
-Evaluate an AI agent capability as a black-box product: does it improve real
-task outcomes compared with a baseline agent that receives only the task prompt?
+Evaluate AI agent capabilities as black-box products: does a skill improve real
+task outcomes compared with a baseline agent, or which of multiple skills works
+best on the same realistic tasks?
 
 This skill is for evaluators, not authors. The evaluator may not know the target
 domain well, so this workflow supplies scenario generation, evidence collection,
@@ -15,9 +16,52 @@ comparison, confidence labeling, and a user-readable HTML report.
 Use the word "skill" below to mean any reusable agent capability: a Codex skill,
 Claude skill, prompt workflow, tool bundle, MCP-backed agent, or similar package.
 
+## Invocation And User Intake
+
+The user may explicitly invoke this skill by saying `use eval-skills`, or the
+agent may invoke it when the user asks to evaluate, test, benchmark, compare, or
+decide whether a skill is useful.
+
+When the user asks for an evaluation but provides no skill source, do not start
+creating scenarios or a workspace. Ask them to provide at least one skill source
+first, and list the accepted source types:
+
+```text
+Please send at least one skill source to evaluate: a GitHub URL, local skill directory, .skill archive, install command, pasted SKILL.md plus referenced files, or the name of an already registered skill.
+```
+
+When the user provides exactly one target skill source, such as one GitHub URL,
+local skill directory, `.skill` archive, install command, or pasted `SKILL.md`,
+do not assume the comparison target. Ask one concise question before building
+the workspace:
+
+```text
+Do you want to compare this skill against the naked agent baseline, or against another skill?
+If another skill, send either the registered skill name or another unregistered skill source.
+```
+
+Use the answer to choose configurations:
+
+- **Baseline comparison**: use `with_skill` and `without_skill`.
+- **Registered skill comparison**: use stable names such as
+  `candidate_skill` and `registered_<name>`. Record the registered skill as
+  `source_type: "already_installed"` in `target_skill_source.json`. If the
+  platform cannot isolate registered-skill availability per run, set
+  `isolation_mode: "current_environment"` and record the contamination risk.
+- **Unregistered skill comparison**: acquire both skill sources as artifacts
+  under `temp/target-skills/<configuration-name>/` and compare those
+  configurations directly, without a naked baseline unless the user asks for
+  one.
+
+When the user already provides two or more skill sources, or explicitly says not
+to include a naked baseline, proceed with multi-skill comparison without asking
+this question. If a requested comparison could cause external writes, still ask
+for explicit approval before running live side-effecting scenarios.
+
 ## Core Principles
 
-- Compare the target skill against a baseline, not against its own claims.
+- Compare the target skill against a baseline or another candidate skill, not
+  against its own claims.
 - Keep the user's workspace tidy. Put all evaluation working files under a
   single `<workspace>/temp/` directory, including cloned target skills,
   fixtures, scenario folders, raw outputs, transcripts, intermediate JSON,
@@ -41,7 +85,8 @@ Claude skill, prompt workflow, tool bundle, MCP-backed agent, or similar package
 ### 1. Acquire And Isolate The Target Skill
 
 Start from the user's installation source, not from an already-active global
-skill whenever possible. Accept:
+skill whenever possible. For multi-skill comparisons, acquire and isolate each
+candidate skill the same way. Accept:
 
 - a `.skill` archive
 - a local skill directory
@@ -53,6 +98,7 @@ Install, clone, unpack, or copy the target into the eval workspace, for example:
 
 ```text
 <workspace>/temp/target-skill/
+<workspace>/temp/target-skills/<configuration-name>/
 ```
 
 Before creating any evaluation artifact, create `<workspace>/temp/` and treat it
@@ -65,11 +111,13 @@ run the A/B test. If it is globally installed, the baseline can still auto-trigg
 it, even from another git branch or worktree. Branches and worktrees isolate files,
 not the agent's available skill list.
 
-Use one of these isolation modes:
+Use one of these isolation modes for each tested configuration:
 
 - **`artifact_path`**: default. Keep the target as an inert local artifact. The
   `with_skill` executor receives `Skill path: <workspace>/temp/target-skill`; the
-  `without_skill` executor receives only the task prompt and fixtures.
+  `without_skill` executor receives only the task prompt and fixtures. For
+  multi-skill comparisons, each configuration receives only its assigned skill
+  path.
 - **`isolated_install`**: install into a temporary skill root or separate agent
   environment. Use this when testing installed-skill behavior or auto-triggering.
 - **`platform_denylist`**: use only if the platform provides a verifiable per-run
@@ -79,7 +127,8 @@ Use one of these isolation modes:
   active and cannot be isolated. Mark `baseline_contamination_risk` as `high`.
 
 Write `<workspace>/temp/target_skill_source.json` with the source, install
-method, resolved local path, and isolation mode.
+method, resolved local path, and isolation mode. For multiple candidate skills,
+use a top-level `targets` array or object keyed by configuration name.
 
 Do not run a dedicated auto-trigger test by default. The scenario prompts should
 be generated from the target skill's actual description and use cases, so they
@@ -95,7 +144,9 @@ python -m scripts.analyze_skill <path-to-skill> --out <workspace>/temp/skill_pro
 ```
 
 Then read the target skill's main instructions yourself and update
-`skill_profile.json` if needed.
+`skill_profile.json` if needed. For multi-skill comparisons, either store one
+combined profile with `skills[]` entries or separate per-skill profiles under
+`<workspace>/temp/skill_profiles/`.
 
 Classify:
 
@@ -119,7 +170,9 @@ that could affect real systems.
 
 ### 3. Generate Scenarios And Fixtures
 
-Generate scenarios from the target skill's actual use cases. The method is
+Generate scenarios from the target skill's actual use cases. For multi-skill
+comparisons, use the overlap of the candidate skills' advertised use cases so
+each configuration can reasonably attempt the same task. The method is
 brainstorming plus judgment, not a fixed template.
 
 Choose scenario count by scope:
@@ -180,16 +233,20 @@ Create `<workspace>/temp/evaluation_context.json` with `sampling_mode:
 "standard"`, `runs_per_configuration: 3`, `blind_level`, `isolation_mode`,
 `baseline_contamination_risk`, `side_effect_risk`, and notes.
 
-Create `<workspace>/temp/label_key.json` before execution. Randomize A/B
-assignment per scenario with an explicit random source or script. Do not use
-predictable alternation as the default.
+Create `<workspace>/temp/label_key.json` before execution. Randomize
+configuration assignment per scenario with an explicit random source or script.
+For two configurations, use `version_a` and `version_b`; for more, continue with
+`version_c`, `version_d`, and so on. Do not use predictable alternation as the
+default.
 
-### 5. Execute With And Without The Skill
+### 5. Execute Configurations
 
-For each scenario, run both configurations:
+For each scenario, run every configuration:
 
 - `with_skill`: the executor receives the target skill path and should use it.
 - `without_skill`: the executor receives only the task prompt and fixtures.
+- multi-skill configurations such as `skill_one` and `skill_two`: each executor
+  receives only the matching skill path and the shared task prompt and fixtures.
 
 If the target skill is installed globally or visible in the baseline agent's
 available skills, do not claim a clean baseline. Either switch to
@@ -201,6 +258,7 @@ Save each run under:
 ```text
 <workspace>/temp/scenario-<id>/version_a/run-<n>/
 <workspace>/temp/scenario-<id>/version_b/run-<n>/
+<workspace>/temp/scenario-<id>/version_c/run-<n>/  # optional for 3+ configurations
 ```
 
 Each run directory should contain:
@@ -212,7 +270,7 @@ Each run directory should contain:
 - `metrics.json`: tool calls, files, and errors when available
 
 For procedural skills, include step files when they help comparison, using the
-same names across A and B.
+same names across all versions.
 
 ### 6. Sanitize Artifacts
 
@@ -237,7 +295,9 @@ Prefer programmatic checks when practical. Natural-language judging is acceptabl
 for subjective quality, but do not use it when a script can verify the outcome.
 
 Use `agents/comparator.md` to compare sanitized Version A vs Version B per
-scenario. The comparator must not see:
+scenario. For more than two configurations, compare all blinded versions in one
+rubric when practical, or run pairwise comparisons and record the method in
+`comparison.json`. The comparator must not see:
 
 - `label_key.json`
 - raw transcripts
@@ -283,13 +343,13 @@ The report is the main deliverable. It should show:
 - blind level, sampling mode, run count, side-effect risk, and leakage risk
 - isolation mode and baseline contamination risk
 - each scenario's prompt and expectations
-- Version A and Version B side by side
+- Version A, Version B, and any additional blinded versions side by side
 - all three standard runs for each version. Do not show only the best run, the
   first run, an average artifact, or a summary in place of the run outputs.
 - inline images, text, HTML, PDFs, and PPTX previews when present
 - download links for binary originals
 - grading details and blind comparator reasoning
-- reveal controls for A/B identity
+- reveal controls for blinded version identity
 
 If a result cannot be rendered inline, the report must say so rather than imply
 the user can visually compare it in the page.

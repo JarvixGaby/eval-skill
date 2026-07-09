@@ -12,6 +12,9 @@ files such as `grading.json`, `metrics.json`, `timing.json`, `comparison.json`,
 ├── temp/
 │   ├── target_skill_source.json
 │   ├── target-skill/
+│   ├── target-skills/
+│   │   ├── skill_one/
+│   │   └── skill_two/
 │   ├── skill_profile.json
 │   ├── scenario_set.json
 │   ├── evaluation_context.json
@@ -29,6 +32,8 @@ files such as `grading.json`, `metrics.json`, `timing.json`, `comparison.json`,
 │   │   │   │   └── grading.json
 │   │   │   └── run-2/
 │   │   ├── version_b/
+│   │   │   └── run-1/
+│   │   ├── version_c/                  # optional for 3+ configurations
 │   │   │   └── run-1/
 │   │   ├── comparison.json
 │   │   └── analysis.json
@@ -74,7 +79,9 @@ Valid `side_effect_risk` values: `read_only`, `local_write`, `external_read`,
 
 ## target_skill_source.json
 
-Records where the target came from and how it was isolated.
+Records where the target came from and how it was isolated. For a baseline
+comparison, a single target object is enough. For multi-skill comparisons, use
+`targets` keyed by configuration name.
 
 ```json
 {
@@ -85,6 +92,30 @@ Records where the target came from and how it was isolated.
   "isolation_mode": "artifact_path",
   "global_install_detected": false,
   "baseline_skill_availability": "target skill not visible to baseline executor",
+  "notes": []
+}
+```
+
+Multi-skill example:
+
+```json
+{
+  "targets": {
+    "skill_one": {
+      "source_type": "local_directory",
+      "source": "/path/to/skill-one",
+      "install_method": "copied into temp/target-skills/skill_one/",
+      "resolved_path": "temp/target-skills/skill_one/",
+      "isolation_mode": "artifact_path"
+    },
+    "skill_two": {
+      "source_type": "local_directory",
+      "source": "/path/to/skill-two",
+      "install_method": "copied into temp/target-skills/skill_two/",
+      "resolved_path": "temp/target-skills/skill_two/",
+      "isolation_mode": "artifact_path"
+    }
+  },
   "notes": []
 }
 ```
@@ -194,6 +225,17 @@ Written before execution and hidden from blind judges.
 }
 ```
 
+For comparing two skills without a naked baseline, map versions to configuration
+names:
+
+```json
+{
+  "scenario-1": {"version_a": "skill_one", "version_b": "skill_two"},
+  "scenario-2": {"version_a": "skill_two", "version_b": "skill_one"}
+}
+```
+
+For three or more configurations, add `version_c`, `version_d`, and so on.
 Assignments should be randomized per scenario. Do not use predictable
 alternation unless recording that limitation in `evaluation_context.json`.
 
