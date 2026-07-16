@@ -78,7 +78,8 @@ If you ask for an evaluation but do not provide any skill source, the agent
 should ask you to provide one of the source types above before it starts
 building scenarios or a workspace.
 
-If you provide only one target, the agent should ask what to compare it against:
+If you provide only one target, the agent defaults to the naked-agent baseline.
+You can instead request:
 
 - The naked agent baseline, meaning no skill.
 - Another registered skill, identified by its installed skill name.
@@ -104,7 +105,7 @@ The skill will then:
    or the overlap between candidate skills.
 4. Run each scenario for every configuration.
 5. Grade every run.
-6. Compare blinded Version A vs Version B.
+6. Compare every blinded version in one N-way rubric.
 7. Aggregate results.
 8. Produce `comparison_report.html`.
 
@@ -200,6 +201,18 @@ Generated evaluation files are kept out of the repository. A normal run creates:
   leakage risk, and limitations.
 - **Clean workspace**: all working files go into `temp/`; the final report stays
   at the workspace root.
+- **Untrusted-target guardrails**: target instructions and installers are kept
+  inert by default, and target-controlled HTML is escaped.
+
+## Anonymized Example Report
+
+The screenshot below comes from a real English-language evaluation of two
+anonymous candidate skills. The benchmark used two scenarios, three independent
+runs per configuration, randomized Version A/B labels, and blind grading before
+identities were revealed. Candidate names and source details are intentionally
+omitted.
+
+![Anonymized Version A and Version B Run 1 comparison](./assets/anonymous-skill-comparison.png)
 
 ## How It Works
 

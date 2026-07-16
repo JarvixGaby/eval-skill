@@ -47,6 +47,7 @@ MIME_OVERRIDES = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+MAX_INLINE_BYTES = 25 * 1024 * 1024
 
 
 def get_mime_type(path: Path) -> str:
@@ -150,6 +151,12 @@ def embed_file(path: Path) -> dict:
     """Read a file and return an embedded representation."""
     ext = path.suffix.lower()
     mime = get_mime_type(path)
+    if path.stat().st_size > MAX_INLINE_BYTES:
+        return {
+            "name": path.name,
+            "type": "error",
+            "content": "File exceeds the 25 MB inline viewer limit.",
+        }
 
     if ext in TEXT_EXTENSIONS:
         try:
@@ -276,7 +283,13 @@ def generate_html(
     if benchmark:
         embedded["benchmark"] = benchmark
 
-    data_json = json.dumps(embedded)
+    # Prevent user-controlled output text from terminating the script element.
+    data_json = (
+        json.dumps(embedded, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
 
     return template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {data_json};")
 

@@ -4,8 +4,7 @@ Aggregate individual run results into benchmark summary statistics.
 
 Reads grading.json files from run directories and produces:
 - run_summary with mean, stddev, min, max for each metric
-- delta between with_skill and without_skill configurations when present, or
-  the first two discovered configurations for multi-skill comparisons
+- delta between with_skill and without_skill configurations when present
 
 Usage:
     python aggregate_benchmark.py <workspace>/temp
@@ -58,6 +57,7 @@ import argparse
 import json
 import math
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -138,19 +138,28 @@ def result_from_run(eval_id, config: str, run_number: int, run_dir: Path, gradin
         "total": grading.get("summary", {}).get("total", 0),
     }
 
-    timing = grading.get("timing", {})
-    result["time_seconds"] = timing.get("total_duration_seconds", 0.0)
+    timing = grading.get("timing", {}) or {}
     timing_file = run_dir / "timing.json"
-    if result["time_seconds"] == 0.0 and timing_file.exists():
-        timing_data = load_json(timing_file, {})
-        result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
-        result["tokens"] = timing_data.get("total_tokens", 0)
+    timing_data = load_json(timing_file, {}) or {}
+    result["time_seconds"] = timing_data.get(
+        "total_duration_seconds",
+        timing_data.get("duration_seconds", timing.get("total_duration_seconds", 0.0)),
+    )
+    result["tokens"] = timing_data.get(
+        "total_tokens", timing_data.get("token_usage", timing.get("total_tokens"))
+    )
 
-    metrics = grading.get("execution_metrics", {})
+    metrics = grading.get("execution_metrics", {}) or {}
+    metrics_data = load_json(run_dir / "metrics.json")
+    if metrics_data is None:
+        metrics_data = load_json(run_dir / "outputs" / "metrics.json", {})
+    if metrics_data:
+        metrics = {**metrics, **metrics_data}
     result["tool_calls"] = metrics.get("total_tool_calls", 0)
-    if not result.get("tokens"):
-        result["tokens"] = metrics.get("output_chars", 0)
+    if result["tokens"] is None:
+        result["tokens"] = metrics.get("total_tokens")
     result["errors"] = metrics.get("errors_encountered", 0)
+    result["output_chars"] = metrics.get("output_chars", 0)
     result["expectations"] = grading.get("expectations", [])
 
     notes_summary = grading.get("user_notes_summary", {})
@@ -288,39 +297,45 @@ def aggregate_results(results: dict) -> dict:
             run_summary[config] = {
                 "pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
                 "time_seconds": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
-                "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0}
+                "tokens": None,
+                "errors": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
+                "output_chars": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
             }
             continue
 
         pass_rates = [r["pass_rate"] for r in runs]
         times = [r["time_seconds"] for r in runs]
-        tokens = [r.get("tokens", 0) for r in runs]
+        tokens = [r["tokens"] for r in runs if isinstance(r.get("tokens"), (int, float))]
+        errors = [r.get("errors", 0) for r in runs]
+        output_chars = [r.get("output_chars", 0) for r in runs]
 
         run_summary[config] = {
             "pass_rate": calculate_stats(pass_rates),
             "time_seconds": calculate_stats(times),
-            "tokens": calculate_stats(tokens)
+            "tokens": calculate_stats(tokens) if tokens else None,
+            "errors": calculate_stats(errors),
+            "output_chars": calculate_stats(output_chars),
         }
 
     # Prefer the meaningful eval-skills delta: with_skill minus without_skill.
     if "with_skill" in run_summary and "without_skill" in run_summary:
         primary = run_summary.get("with_skill", {})
         baseline = run_summary.get("without_skill", {})
-    elif len(configs) >= 2:
-        primary = run_summary.get(configs[0], {})
-        baseline = run_summary.get(configs[1], {})
     else:
-        primary = run_summary.get(configs[0], {}) if configs else {}
-        baseline = {}
+        return run_summary
 
     delta_pass_rate = primary.get("pass_rate", {}).get("mean", 0) - baseline.get("pass_rate", {}).get("mean", 0)
     delta_time = primary.get("time_seconds", {}).get("mean", 0) - baseline.get("time_seconds", {}).get("mean", 0)
-    delta_tokens = primary.get("tokens", {}).get("mean", 0) - baseline.get("tokens", {}).get("mean", 0)
+    primary_tokens = primary.get("tokens") or {}
+    baseline_tokens = baseline.get("tokens") or {}
+    delta_tokens = primary_tokens.get("mean", 0) - baseline_tokens.get("mean", 0)
+    delta_errors = primary.get("errors", {}).get("mean", 0) - baseline.get("errors", {}).get("mean", 0)
 
     run_summary["delta"] = {
         "pass_rate": f"{delta_pass_rate:+.2f}",
         "time_seconds": f"{delta_time:+.1f}",
-        "tokens": f"{delta_tokens:+.0f}"
+        "tokens": f"{delta_tokens:+.0f}",
+        "errors": f"{delta_errors:+.2f}",
     }
 
     return run_summary
@@ -347,9 +362,10 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
                     "failed": result["failed"],
                     "total": result["total"],
                     "time_seconds": result["time_seconds"],
-                    "tokens": result.get("tokens", 0),
+                    "tokens": result.get("tokens"),
                     "tool_calls": result.get("tool_calls", 0),
-                    "errors": result.get("errors", 0)
+                    "errors": result.get("errors", 0),
+                    "output_chars": result.get("output_chars", 0),
                 },
                 "expectations": result["expectations"],
                 "notes": result["notes"]
@@ -361,12 +377,12 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
         for config in results.values()
         for r in config
     ))
-    runs_per_configuration = 0
-    if results:
-        runs_per_configuration = max(
-            len({(r["eval_id"], r["run_number"]) for r in config_results})
-            for config_results in results.values()
-        )
+    per_scenario_counts = Counter(
+        (config, r["eval_id"])
+        for config, config_results in results.items()
+        for r in config_results
+    )
+    runs_per_configuration = max(per_scenario_counts.values(), default=0)
 
     benchmark = {
         "metadata": {
@@ -403,8 +419,8 @@ def generate_markdown(benchmark: dict) -> str:
         "",
         "## Summary",
         "",
-        "| Configuration | Pass Rate | Time | Tokens |",
-        "|---------------|-----------|------|--------|",
+        "| Configuration | Pass Rate | Time | Tokens | Errors |",
+        "|---------------|-----------|------|--------|--------|",
     ]
 
     for config in configs:
@@ -412,23 +428,29 @@ def generate_markdown(benchmark: dict) -> str:
         label = config.replace("_", " ").title()
         pass_rate = summary.get("pass_rate", {})
         time_seconds = summary.get("time_seconds", {})
-        tokens = summary.get("tokens", {})
+        tokens = summary.get("tokens")
+        token_text = (
+            f"{tokens.get('mean', 0):.0f} ± {tokens.get('stddev', 0):.0f}"
+            if tokens else "n/a"
+        )
+        errors = summary.get("errors", {})
         lines.append(
             f"| {label} | "
             f"{pass_rate.get('mean', 0)*100:.0f}% ± {pass_rate.get('stddev', 0)*100:.0f}% | "
             f"{time_seconds.get('mean', 0):.1f}s ± {time_seconds.get('stddev', 0):.1f}s | "
-            f"{tokens.get('mean', 0):.0f} ± {tokens.get('stddev', 0):.0f} |"
+            f"{token_text} | {errors.get('mean', 0):.2f} ± {errors.get('stddev', 0):.2f} |"
         )
 
     delta = run_summary.get("delta")
     if delta:
         lines.extend([
             "",
-            "Delta is computed as `with_skill - without_skill` when those configurations exist; otherwise it uses the first two discovered configurations.",
+            "Delta is computed as `with_skill - without_skill`.",
             "",
             f"- Pass rate: {delta.get('pass_rate', '—')}",
             f"- Time: {delta.get('time_seconds', '—')}s",
             f"- Tokens: {delta.get('tokens', '—')}",
+            f"- Errors: {delta.get('errors', '—')}",
         ])
 
     # Notes section
@@ -483,13 +505,13 @@ def main():
     output_md = output_json.with_suffix(".md")
 
     # Write benchmark.json
-    with open(output_json, "w") as f:
+    with open(output_json, "w", encoding="utf-8") as f:
         json.dump(benchmark, f, indent=2)
     print(f"Generated: {output_json}")
 
     # Write benchmark.md
     markdown = generate_markdown(benchmark)
-    with open(output_md, "w") as f:
+    with open(output_md, "w", encoding="utf-8") as f:
         f.write(markdown)
     print(f"Generated: {output_md}")
 

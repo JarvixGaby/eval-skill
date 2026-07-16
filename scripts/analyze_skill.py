@@ -3,9 +3,9 @@
 Analyze a skill's SKILL.md and produce a skill_profile.json used to plan the eval.
 
 This is a *deterministic first pass*. It extracts structural signals (headers,
-numbered steps, bundled resources) so Claude doesn't have to re-read the whole
+numbered steps, bundled resources) so the evaluator does not have to re-read the whole
 file from scratch every time, and so the "procedural vs holistic" judgment call
-has some grounded signal behind it. Claude should still read SKILL.md itself
+has some grounded signal behind it. The evaluator should still read SKILL.md itself
 and use judgment -- this script's output is a scaffold, not a verdict.
 
 Usage:
@@ -26,12 +26,25 @@ HEADER_RE = re.compile(r"^(#{2,4})\s+(.*)$", re.MULTILINE)
 NUMBERED_STEP_RE = re.compile(r"^\s*(?:###?\s*)?(?:Step\s*)?(\d+)[\.\):]\s+(.*)$", re.MULTILINE | re.IGNORECASE)
 
 
+IGNORED_PARTS = {"__pycache__", ".git", ".pytest_cache", ".mypy_cache", "node_modules"}
+IGNORED_SUFFIXES = {".pyc", ".pyo", ".DS_Store"}
+
+
 def find_bundled_resources(skill_path: Path) -> dict:
-    resources = {}
+    resources = {"scripts": [], "references": [], "assets": []}
     for sub in ("scripts", "references", "assets"):
         d = skill_path / sub
         if d.is_dir():
-            resources[sub] = sorted(str(p.relative_to(skill_path)) for p in d.rglob("*") if p.is_file())
+            resources[sub] = sorted(
+                str(p.relative_to(skill_path))
+                for p in d.rglob("*")
+                if p.is_file()
+                and not any(
+                    part in IGNORED_PARTS or part.startswith(".")
+                    for part in p.relative_to(skill_path).parts
+                )
+                and p.suffix not in IGNORED_SUFFIXES
+            )
     return resources
 
 
@@ -53,7 +66,7 @@ def extract_candidate_steps(content: str) -> list[str]:
 
 def guess_domain(description: str) -> str:
     """Very rough domain tag from the description -- for human sanity-checking,
-    not for any downstream logic. Claude should refine this."""
+    not for any downstream logic. The evaluator should refine this."""
     return description.strip()
 
 
@@ -72,7 +85,7 @@ def main():
     body_lines = content.count("\n") + 1
     has_scripts = bool(resources.get("scripts"))
 
-    # Heuristic classification -- Claude should confirm/override this, not trust it blindly.
+    # Heuristic classification -- the evaluator must confirm or override it.
     if len(candidate_steps) >= 2:
         suggested_type = "procedural"
     elif has_scripts:
@@ -92,15 +105,17 @@ def main():
         "suggested_type": suggested_type,
         "note": (
             "suggested_type is a heuristic based on numbered headers/lists and "
-            "the presence of scripts/. Claude MUST read SKILL.md directly and "
+            "the presence of scripts/. The evaluator MUST read SKILL.md directly and "
             "confirm or override this before generating prompts -- e.g. a skill "
             "with 5 numbered 'tips' is not the same as 5 sequential pipeline steps."
         ),
     }
 
-    out_path = args.out or (skill_path.parent / f"{name or skill_path.name}-eval-workspace" / "skill_profile.json")
+    out_path = args.out or (
+        skill_path.parent / f"{name or skill_path.name}-eval-workspace" / "temp" / "skill_profile.json"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(profile, indent=2, ensure_ascii=False))
+    out_path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(json.dumps(profile, indent=2, ensure_ascii=False))
     print(f"\nWrote profile to {out_path}", file=sys.stderr)

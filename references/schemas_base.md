@@ -1,6 +1,6 @@
 # JSON Schemas
 
-This document defines the JSON schemas used by skill-creator.
+This document defines the JSON schemas used by eval-skills.
 
 ---
 
@@ -162,7 +162,7 @@ Output from the grader agent. Located at `<run-dir>/grading.json`.
 
 ## metrics.json
 
-Output from the executor agent. Located at `<run-dir>/outputs/metrics.json`.
+Output from the executor agent. Located at `<run-dir>/metrics.json`.
 
 ```json
 {
@@ -197,6 +197,9 @@ Output from the executor agent. Located at `<run-dir>/outputs/metrics.json`.
 ## timing.json
 
 Wall clock timing for a run. Located at `<run-dir>/timing.json`.
+
+Use `total_duration_seconds` and `total_tokens` as canonical fields. The
+aggregator also accepts the common aliases `duration_seconds` and `token_usage`.
 
 **How to capture:** When a subagent task completes, the task notification includes `total_tokens` and `duration_ms`. Save these immediately — they are not persisted anywhere else and cannot be recovered after the fact.
 
@@ -246,7 +249,8 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
         "time_seconds": 42.5,
         "tokens": 3800,
         "tool_calls": 18,
-        "errors": 0
+        "errors": 0,
+        "output_chars": 12450
       },
       "expectations": [
         {"text": "...", "passed": true, "evidence": "..."}
@@ -297,10 +301,15 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
   - `configuration`: Stable configuration name, such as `"with_skill"`,
     `"without_skill"`, `"skill_one"`, or `"skill_two"`
   - `run_number`: Integer run number (1, 2, 3...)
-  - `result`: Nested object with `pass_rate`, `passed`, `total`, `time_seconds`, `tokens`, `errors`
+  - `result`: Nested object with `pass_rate`, `passed`, `total`, `time_seconds`,
+    optional `tokens`, `errors`, and `output_chars`. Keep `tokens` null when
+    unavailable; never substitute character counts.
 - `run_summary`: Statistical aggregates per configuration
-  - configuration keys such as `with_skill`, `without_skill`, `skill_one`, or `skill_two`: each contains `pass_rate`, `time_seconds`, `tokens` objects with `mean` and `stddev` fields
-  - `delta`: Difference strings like `"+0.50"`, `"+13.0"`, `"+1700"`
+  - configuration keys such as `with_skill`, `without_skill`, `skill_one`, or
+    `skill_two`: each contains `pass_rate`, `time_seconds`, `errors`, and
+    `output_chars` statistics; `tokens` is either statistics or null
+  - `delta`: Present only for `with_skill` versus `without_skill`; contains
+    difference strings such as `"+0.50"`, `"+13.0"`, and `"+1700"`
 - `notes`: Freeform observations from the analyzer
 
 **Important:** The viewer reads these field names exactly. Using `config` instead of `configuration`, or putting `pass_rate` at the top level of a run instead of nested under `result`, will cause the viewer to show empty/zero values. Always reference this schema when generating benchmark.json manually.
@@ -309,123 +318,89 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
 
 ## comparison.json
 
-Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
+Output from the blind comparator. Located at `<scenario-dir>/comparison.json`.
 
 ```json
 {
-  "winner": "A",
-  "reasoning": "Output A provides a complete solution with proper formatting and all required fields. Output B is missing the date field and has formatting inconsistencies.",
+  "method": "n_way",
+  "versions_compared": ["A", "B", "C"],
+  "winner": "C",
+  "ranking": ["C", "A", "B"],
+  "ties": [],
+  "reasoning": "C is strongest and remains consistent across three runs.",
   "rubric": {
+    "criteria": ["correctness", "completeness", "organization", "usability"],
     "A": {
-      "content": {
-        "correctness": 5,
-        "completeness": 5,
-        "accuracy": 4
-      },
-      "structure": {
-        "organization": 4,
-        "formatting": 5,
-        "usability": 4
-      },
-      "content_score": 4.7,
-      "structure_score": 4.3,
-      "overall_score": 9.0
+      "scores": {"correctness": 4, "completeness": 4, "organization": 4, "usability": 4},
+      "overall_score": 8.0,
+      "run_consistency": "medium"
     },
     "B": {
-      "content": {
-        "correctness": 3,
-        "completeness": 2,
-        "accuracy": 3
-      },
-      "structure": {
-        "organization": 3,
-        "formatting": 2,
-        "usability": 3
-      },
-      "content_score": 2.7,
-      "structure_score": 2.7,
-      "overall_score": 5.4
+      "scores": {"correctness": 3, "completeness": 3, "organization": 4, "usability": 3},
+      "overall_score": 6.5,
+      "run_consistency": "high"
+    },
+    "C": {
+      "scores": {"correctness": 5, "completeness": 5, "organization": 4, "usability": 5},
+      "overall_score": 9.5,
+      "run_consistency": "high"
     }
   },
   "output_quality": {
-    "A": {
-      "score": 9,
-      "strengths": ["Complete solution", "Well-formatted", "All fields present"],
-      "weaknesses": ["Minor style inconsistency in header"]
-    },
-    "B": {
-      "score": 5,
-      "strengths": ["Readable output", "Correct basic structure"],
-      "weaknesses": ["Missing date field", "Formatting inconsistencies", "Partial data extraction"]
-    }
+    "A": {"score": 8.0, "strengths": ["Clear"], "weaknesses": ["One incomplete run"]},
+    "B": {"score": 6.5, "strengths": ["Consistent"], "weaknesses": ["Missing detail"]},
+    "C": {"score": 9.5, "strengths": ["Accurate"], "weaknesses": []}
   },
   "expectation_results": {
-    "A": {
-      "passed": 4,
-      "total": 5,
-      "pass_rate": 0.80,
-      "details": [
-        {"text": "Output includes name", "passed": true}
-      ]
-    },
-    "B": {
-      "passed": 3,
-      "total": 5,
-      "pass_rate": 0.60,
-      "details": [
-        {"text": "Output includes name", "passed": true}
-      ]
-    }
-  }
+    "A": {"passed": 4, "total": 5, "pass_rate": 0.8, "details": []},
+    "B": {"passed": 3, "total": 5, "pass_rate": 0.6, "details": []},
+    "C": {"passed": 5, "total": 5, "pass_rate": 1.0, "details": []}
+  },
+  "limitations": []
 }
 ```
+
+For two versions, use the same shape with `versions_compared: ["A", "B"]`.
+For a complete tie, set `winner` to `TIE` and list tied labels in `ties`.
 
 ---
 
 ## analysis.json
 
-Output from post-hoc analyzer. Located at `<grading-dir>/analysis.json`.
+Output from the post-hoc analyzer. Located at `<scenario-dir>/analysis.json`.
 
 ```json
 {
   "comparison_summary": {
-    "winner": "A",
-    "winner_skill": "path/to/winner/skill",
-    "loser_skill": "path/to/loser/skill",
-    "comparator_reasoning": "Brief summary of why comparator chose winner"
+    "blind_winner": "C",
+    "winner_configuration": "skill_three",
+    "ranking_configurations": ["skill_three", "skill_one", "skill_two"],
+    "comparator_reasoning": "C was most accurate and consistent."
   },
-  "winner_strengths": [
-    "Clear step-by-step instructions for handling multi-page documents",
-    "Included validation script that caught formatting errors"
-  ],
-  "loser_weaknesses": [
-    "Vague instruction 'process the document appropriately' led to inconsistent behavior",
-    "No script for validation, agent had to improvise"
-  ],
-  "instruction_following": {
-    "winner": {
-      "score": 9,
-      "issues": ["Minor: skipped optional logging step"]
-    },
-    "loser": {
-      "score": 6,
-      "issues": [
-        "Did not use the skill's formatting template",
-        "Invented own approach instead of following step 3"
-      ]
+  "configuration_findings": {
+    "skill_three": {
+      "strengths": ["Explicit validation caught malformed output"],
+      "weaknesses": [],
+      "instruction_following_score": 9,
+      "execution_pattern": "Read -> produce -> validate -> revise",
+      "causal_evidence": ["All three transcripts show the validator fixing the defect"]
     }
   },
   "improvement_suggestions": [
     {
+      "configuration": "skill_two",
       "priority": "high",
       "category": "instructions",
-      "suggestion": "Replace 'process the document appropriately' with explicit steps",
-      "expected_impact": "Would eliminate ambiguity that caused inconsistent behavior"
+      "suggestion": "Make validation mandatory and define recovery steps.",
+      "expected_impact": "Reduce malformed outputs."
     }
   ],
-  "transcript_insights": {
-    "winner_execution_pattern": "Read skill -> Followed 5-step process -> Used validation script",
-    "loser_execution_pattern": "Read skill -> Unclear on approach -> Tried 3 different methods"
-  }
+  "efficiency_findings": {
+    "time": "skill_three was slower",
+    "tokens": "Token data unavailable for one configuration",
+    "errors": "skill_two averaged 1.3 errors"
+  },
+  "limitations": ["Only one fixture family was tested"],
+  "causal_confidence": "medium"
 }
 ```

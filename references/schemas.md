@@ -238,6 +238,8 @@ names:
 For three or more configurations, add `version_c`, `version_d`, and so on.
 Assignments should be randomized per scenario. Do not use predictable
 alternation unless recording that limitation in `evaluation_context.json`.
+Use one N-way `comparison.json` per scenario with `versions_compared`, `winner`,
+`ranking`, and one rubric entry per blinded version; see `schemas_base.md`.
 
 ## PPTX Preview Convention
 

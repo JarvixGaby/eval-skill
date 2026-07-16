@@ -36,6 +36,7 @@ MIME_OVERRIDES = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+MAX_INLINE_BYTES = 25 * 1024 * 1024
 
 
 def mime_of(p: Path) -> str:
@@ -51,6 +52,11 @@ def escape_attr(s: str) -> str:
 
 
 def data_download_link(p: Path, label: str = "Download") -> str:
+    if p.stat().st_size > MAX_INLINE_BYTES:
+        return (
+            f'<span class="unsupported-note">{escape(label)} unavailable inline: '
+            f'{escape(p.name)} exceeds the 25 MB report limit.</span>'
+        )
     b64 = base64.b64encode(p.read_bytes()).decode("ascii")
     return f'<a download="{escape_attr(p.name)}" href="data:{mime_of(p)};base64,{b64}">{escape(label)}</a>'
 
@@ -80,17 +86,23 @@ def is_office_preview_file(p: Path, all_files: list[Path]) -> bool:
 
 def render_output_file(p: Path) -> str:
     ext = p.suffix.lower()
+    safe_name = escape(p.name)
+    if p.stat().st_size > MAX_INLINE_BYTES:
+        return (
+            f'<div class="file-block"><div class="file-name">{safe_name}</div>'
+            '<div class="unsupported-note">File is larger than 25 MB and was not embedded in the static report.</div></div>'
+        )
     if ext == ".pdf":
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-        return (f'<div class="file-block"><div class="file-name">{p.name}</div>'
+        return (f'<div class="file-block"><div class="file-name">{safe_name}</div>'
                 f'<embed src="data:application/pdf;base64,{b64}" type="application/pdf" class="pdf-embed"/></div>')
     if ext in IMAGE_EXT:
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-        return (f'<div class="file-block"><div class="file-name">{p.name}</div>'
+        return (f'<div class="file-block"><div class="file-name">{safe_name}</div>'
                 f'<img src="data:{mime_of(p)};base64,{b64}" class="img-embed"/></div>')
     if ext == ".html":
         text = p.read_text(errors="replace")
-        return (f'<div class="file-block"><div class="file-name">{p.name}</div>'
+        return (f'<div class="file-block"><div class="file-name">{safe_name}</div>'
                 f'<iframe class="html-embed" sandbox srcdoc="{escape_attr(text)}"></iframe>'
                 f'<details><summary>View source</summary><pre class="text-embed">{escape(text)}</pre></details></div>')
     if ext == ".pptx":
@@ -100,13 +112,13 @@ def render_output_file(p: Path) -> str:
             preview_html = ''.join(render_output_file(preview) for preview in previews)
         else:
             preview_html = '<div class="unsupported-note">No PPTX preview file found. Add deck.preview-01.png or deck.preview.pdf to embed slides inline.</div>'
-        return (f'<div class="file-block"><div class="file-name">{p.name} (PPTX)</div>'
+        return (f'<div class="file-block"><div class="file-name">{safe_name} (PPTX)</div>'
                 f'{preview_html}<div class="download-link">{data_download_link(p, "Download original PPTX")}</div></div>')
     if ext in TEXT_EXT:
         text = p.read_text(errors="replace")
-        return (f'<div class="file-block"><div class="file-name">{p.name}</div>'
+        return (f'<div class="file-block"><div class="file-name">{safe_name}</div>'
                 f'<pre class="text-embed">{escape(text)}</pre></div>')
-    return (f'<div class="file-block"><div class="file-name">{p.name} (binary)</div>'
+    return (f'<div class="file-block"><div class="file-name">{safe_name} (binary)</div>'
             f'{data_download_link(p)}</div>')
 
 
@@ -213,12 +225,15 @@ def build_column(version_dir: Path, label: str) -> str:
     return f'<div class="column"><div class="column-label">{label}{run_note}</div>{body}</div>'
 
 
-def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict) -> str:
+def build_scenario_section(
+    workspace: Path, scenario_dir: Path, label_map: dict, scenario_spec: dict
+) -> str:
     sid = scenario_dir.name
     meta = load_json(scenario_dir / "eval_metadata.json", {})
     prompt = meta.get("prompt", "(no prompt found)")
     eval_name = meta.get("eval_name", sid)
     comparison = load_json(scenario_dir / "comparison.json")
+    analysis = load_json(scenario_dir / "analysis.json", {})
 
     mapping = label_map.get(sid, {})  # e.g. {"version_a": "pdf_skill", "version_b": "doc_skill"}
     version_dirs = version_dirs_for_scenario(scenario_dir, mapping)
@@ -234,6 +249,16 @@ def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict)
             for version_name, config in sorted(mapping.items())
             if version_name.startswith("version_")
         )
+
+    expectations = scenario_spec.get("expectations", [])
+    expectations_html = ""
+    if expectations:
+        items = "".join(
+            f'<li><span class="expectation-type">{escape(str(item.get("type", "judge")))}</span> '
+            f'{escape(str(item.get("text", "")))}</li>'
+            for item in expectations
+        )
+        expectations_html = f'<div class="scenario-expectations"><strong>Expectations</strong><ul>{items}</ul></div>'
         reveal_html = (
             f'<div class="reveal" data-labels="{escape_attr(reveal_text)}">'
             f'<button class="reveal-btn" onclick="revealLabels(this)">Reveal configurations</button>'
@@ -259,18 +284,54 @@ def build_scenario_section(workspace: Path, scenario_dir: Path, label_map: dict)
             f'<p class="reasoning">{escape(reasoning)}</p></details>'
         )
 
+    analysis_html = ""
+    if analysis:
+        suggestions = analysis.get("improvement_suggestions", [])
+        blocks = []
+        findings = analysis.get("configuration_findings", {})
+        for config, finding in findings.items():
+            strengths = finding.get("strengths", [])
+            weaknesses = finding.get("weaknesses", [])
+            details = strengths + weaknesses
+            if details:
+                blocks.append(f"<strong>{escape(str(config))}</strong><ul>" + "".join(
+                    f"<li>{escape(str(item))}</li>" for item in details
+                ) + "</ul>")
+        if suggestions:
+            blocks.append("<strong>Improvement suggestions</strong><ul>" + "".join(
+                f'<li><b>{escape(str(item.get("priority", "")))}</b>: '
+                f'{escape(str(item.get("suggestion", "")))}</li>'
+                for item in suggestions
+            ) + "</ul>")
+        if blocks:
+            analysis_html = '<details class="analysis"><summary>Post-hoc analysis</summary>' + "".join(blocks) + "</details>"
+
     return f'''
     <section class="scenario">
       <h2>{escape(eval_name)}</h2>
       <div class="prompt-block"><strong>Prompt:</strong> {escape(prompt)}</div>
-      <div class="columns">{columns}</div>
+      {expectations_html}
+      <div class="columns" id="{escape_attr(sid)}-runs">{columns}</div>
       {verdict_html}
+      {analysis_html}
       {reveal_html}
     </section>
     '''
 
 
-def build_summary_card(skill_name: str, scenario_dirs: list, label_map: dict, context: dict) -> str:
+def metric_text(summary: dict, metric: str, suffix: str = "", scale: float = 1.0) -> str:
+    stats = summary.get(metric)
+    if not stats:
+        return "n/a"
+    return (
+        f'{stats.get("mean", 0) * scale:.2f} ± '
+        f'{stats.get("stddev", 0) * scale:.2f}{suffix}'
+    )
+
+
+def build_summary_card(
+    skill_name: str, scenario_dirs: list, label_map: dict, context: dict, benchmark: dict
+) -> str:
     total = len(scenario_dirs)
     wins_by_config: dict[str, int] = {}
     scored = 0
@@ -313,6 +374,22 @@ def build_summary_card(skill_name: str, scenario_dirs: list, label_map: dict, co
     limitations_html = ""
     if limitations:
         limitations_html = '<ul class="limitations">' + ''.join(f'<li>{escape(str(item))}</li>' for item in limitations) + '</ul>'
+    benchmark_html = ""
+    run_summary = benchmark.get("run_summary", {}) if benchmark else {}
+    configs = [name for name in run_summary if name != "delta"]
+    if configs:
+        rows = "".join(
+            f'<tr><td>{escape(config)}</td>'
+            f'<td>{metric_text(run_summary[config], "pass_rate", "%", 100)}</td>'
+            f'<td>{metric_text(run_summary[config], "time_seconds", "s")}</td>'
+            f'<td>{metric_text(run_summary[config], "tokens")}</td>'
+            f'<td>{metric_text(run_summary[config], "errors")}</td></tr>'
+            for config in configs
+        )
+        benchmark_html = (
+            '<table class="benchmark"><thead><tr><th>Configuration</th><th>Pass rate</th>'
+            '<th>Time</th><th>Tokens</th><th>Errors</th></tr></thead><tbody>' + rows + '</tbody></table>'
+        )
     return f'''
     <div class="summary-card">
       <h1>eval-skills report: {escape(skill_name)}</h1>
@@ -320,12 +397,19 @@ def build_summary_card(skill_name: str, scenario_dirs: list, label_map: dict, co
       <div class="scenario-count">{total} scenario(s) tested</div>
       <div class="evidence-chips">{chip_html}</div>
       {limitations_html}
+      {benchmark_html}
     </div>
     '''
 
 
 CSS = '''
 body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; color: #1a1a1a; margin: 0; padding: 2rem; }
+body:has(.columns:target) .summary-card { display: none; }
+body:has(.columns:target) .scenario:not(:has(.columns:target)) { display: none; }
+body:has(.columns:target) .scenario:has(.columns:target) > h2,
+body:has(.columns:target) .scenario:has(.columns:target) > .prompt-block,
+body:has(.columns:target) .scenario:has(.columns:target) > .scenario-expectations { display: none; }
+.columns:target { scroll-margin-top: 2rem; }
 .summary-card { background: #fff; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .summary-card h1 { margin: 0 0 0.5rem; font-size: 1.4rem; }
 .verdict-line { font-size: 1.1rem; font-weight: 600; color: #1b5e20; }
@@ -333,9 +417,14 @@ body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; 
 .evidence-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 1rem; }
 .chip { background: #eef2f7; border: 1px solid #d9e1ec; border-radius: 999px; padding: 0.3rem 0.65rem; font-size: 0.78rem; color: #3a4656; }
 .limitations { margin: 0.75rem 0 0; color: #6b4f00; font-size: 0.86rem; }
+.benchmark { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.82rem; }
+.benchmark th, .benchmark td { text-align: left; border-bottom: 1px solid #e5e7eb; padding: 0.45rem; }
 .scenario { background: #fff; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .scenario h2 { margin-top: 0; font-size: 1.15rem; }
 .prompt-block { background: #f0f2f5; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.92rem; }
+.scenario-expectations { margin: 0 0 1rem; font-size: 0.86rem; }
+.scenario-expectations ul { margin: 0.4rem 0 0; padding-left: 1.25rem; }
+.expectation-type { color: #5b6472; font-size: 0.75rem; text-transform: uppercase; }
 .columns { display: flex; gap: 1.5rem; align-items: flex-start; overflow-x: auto; }
 .column { flex: 1 0 22rem; min-width: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; }
 .column-label { font-weight: 700; color: #555; margin-bottom: 0.75rem; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.04em; }
@@ -361,6 +450,7 @@ body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; 
 .verdict { margin-top: 1rem; background: #fffbe6; border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.88rem; }
 .verdict summary { cursor: pointer; font-weight: 600; }
 .reasoning { margin: 0.5rem 0 0; color: #444; }
+.analysis { margin-top: 0.75rem; background: #eef7ff; border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.86rem; }
 .reveal { margin-top: 0.75rem; }
 .reveal-btn { background: #1a1a1a; color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
 .reveal-result { margin-left: 0.75rem; font-weight: 600; }
@@ -389,18 +479,29 @@ def main():
     skill_name = args.skill_name or workspace.name
     label_map = load_json(workspace / "label_key.json", {})
     context = load_json(workspace / "evaluation_context.json", {})
+    scenario_set = load_json(workspace / "scenario_set.json", {})
+    benchmark = load_json(workspace / "benchmark.json", {})
+    scenario_specs = {
+        f'scenario-{item.get("id")}': item
+        for item in scenario_set.get("scenarios", [])
+        if item.get("id") is not None
+    }
 
     scenario_dirs = sorted(
         d for d in workspace.iterdir() if d.is_dir() and d.name.startswith("scenario-")
     )
 
-    sections = "".join(build_scenario_section(workspace, sd, label_map) for sd in scenario_dirs)
-    summary = build_summary_card(skill_name, scenario_dirs, label_map, context)
+    sections = "".join(
+        build_scenario_section(workspace, sd, label_map, scenario_specs.get(sd.name, {}))
+        for sd in scenario_dirs
+    )
+    summary = build_summary_card(skill_name, scenario_dirs, label_map, context, benchmark)
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-src data:; object-src data:;"/>
 <title>eval-skills report: {escape(skill_name)}</title>
 <style>{CSS}</style>
 </head>
@@ -412,7 +513,8 @@ def main():
 </html>'''
 
     out_path = args.out or (workspace / "comparison_report.html")
-    out_path.write_text(html)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
     print(f"Wrote comparison report to {out_path}")
 
 

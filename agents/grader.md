@@ -100,7 +100,8 @@ Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir).
 
 ### Step 8: Read Executor Metrics and Timing
 
-1. If `{outputs_dir}/metrics.json` exists, read it and include in grading output
+1. If `{outputs_dir}/../metrics.json` exists, read it and include it in grading
+   output. For legacy runs only, fall back to `{outputs_dir}/metrics.json`.
 2. If `{outputs_dir}/../timing.json` exists, read it and include timing data
 
 ## Output Format

@@ -73,7 +73,7 @@ Do not include a naked baseline.
 
 如果你要求评估但没有提供任何 Skill source，Agent 应该先提醒你提供上面任意一种来源，然后再开始生成场景或创建 workspace。
 
-如果你只提供了一个目标，Agent 应该先问你要和什么对比：
+如果你只提供了一个目标，Agent 默认与裸模型 baseline 对比。你也可以明确要求：
 
 - 裸模型 baseline，也就是不使用任何 Skill。
 - 另一个已注册 Skill，用已安装的 skill name 指定。
@@ -95,7 +95,7 @@ Do not include a naked baseline.
 3. 根据目标 Skill 的真实用途，或多个候选 Skill 的共同能力范围生成测试场景。
 4. 对每个场景运行所有 configuration。
 5. 对每次 run 打分。
-6. 对 Version A 和 Version B 做盲对比。
+6. 使用统一的 N-way rubric 对所有匿名版本做盲对比。
 7. 聚合结果。
 8. 生成 `comparison_report.html`。
 
@@ -179,6 +179,7 @@ eval-skills/
 - **并排 HTML 报告**：把 A/B 输出嵌入同一个静态 HTML，方便直接比较。
 - **诚实标注证据强度**：报告会记录 blind level、side-effect risk、leakage risk 和 limitations。
 - **目录干净**：所有工作文件进入 `temp/`，最终报告留在 workspace 根目录。
+- **不可信目标防护**：默认不执行目标 Skill 的安装器或脚本，并转义目标控制的 HTML 内容。
 
 ## 原理介绍
 

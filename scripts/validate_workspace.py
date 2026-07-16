@@ -14,13 +14,7 @@ import sys
 from pathlib import Path
 
 
-REQUIRED_TOP_LEVEL = [
-    "target_skill_source.json",
-    "skill_profile.json",
-    "scenario_set.json",
-    "evaluation_context.json",
-    "label_key.json",
-]
+REQUIRED_TOP_LEVEL = ["target_skill_source.json", "skill_profile.json"]
 
 REQUIRED_RUN_FILES = [
     "transcript.md",
@@ -65,7 +59,11 @@ def check_run_dir(run_dir: Path, errors: list[str]):
         if not p.exists():
             errors.append(f"Missing run file: {p}")
         elif p.suffix == ".json":
-            load_json(p, errors)
+            data = load_json(p, errors)
+            if name == "grading.json" and isinstance(data, dict):
+                summary = data.get("summary")
+                if not isinstance(summary, dict) or not isinstance(summary.get("pass_rate"), (int, float)):
+                    errors.append(f"grading.json missing numeric summary.pass_rate: {p}")
 
 
 def version_names_for_scenario(scenario_dir: Path, mapping) -> list[str]:
@@ -97,17 +95,31 @@ def validate(workspace: Path) -> tuple[list[str], list[str]]:
         errors.append("evaluation_context.json must set sampling_mode to 'standard'")
     if context.get("runs_per_configuration") != 3:
         errors.append("evaluation_context.json must set runs_per_configuration to 3")
+    allowed_levels = {"low", "medium", "high"}
+    for field in ("baseline_contamination_risk", "artifact_leakage_risk", "visual_comparability"):
+        if context.get(field) not in allowed_levels:
+            errors.append(f"evaluation_context.json {field} must be low, medium, or high")
+    if context.get("blind_level") not in {"strong_blind", "weak_blind", "not_blind"}:
+        errors.append("evaluation_context.json blind_level is invalid")
 
     scenarios = scenario_set.get("scenarios")
     if not isinstance(scenarios, list) or not scenarios:
         errors.append("scenario_set.json must contain a non-empty scenarios array")
         scenarios = []
 
+    seen_ids = set()
     for scenario in scenarios:
         sid = scenario.get("id")
         if sid is None:
             errors.append("Every scenario must have an id")
             continue
+        if sid in seen_ids:
+            errors.append(f"Duplicate scenario id: {sid}")
+            continue
+        seen_ids.add(sid)
+        expectations = scenario.get("expectations")
+        if not isinstance(expectations, list) or not expectations:
+            errors.append(f"scenario-{sid} must define a non-empty expectations array")
         scenario_name = f"scenario-{sid}"
         scenario_dir = workspace / scenario_name
         if not scenario_dir.is_dir():
@@ -115,7 +127,7 @@ def validate(workspace: Path) -> tuple[list[str], list[str]]:
             continue
 
         load_json(scenario_dir / "eval_metadata.json", errors)
-        load_json(scenario_dir / "comparison.json", errors)
+        comparison = load_json(scenario_dir / "comparison.json", errors)
         load_json(scenario_dir / "analysis.json", errors)
 
         mapping = label_key.get(scenario_name)
@@ -135,6 +147,29 @@ def validate(workspace: Path) -> tuple[list[str], list[str]]:
         version_names = version_names_for_scenario(scenario_dir, mapping)
         if len(version_names) < 2:
             errors.append(f"{scenario_dir} must contain at least two version_* directories")
+        mapped_names = {name for name in mapping if name.startswith("version_")} if isinstance(mapping, dict) else set()
+        directory_names = {d.name for d in scenario_dir.glob("version_*") if d.is_dir()}
+        if mapped_names != directory_names:
+            errors.append(
+                f"{scenario_name} version directories must exactly match label_key mappings "
+                f"(mapped={sorted(mapped_names)}, directories={sorted(directory_names)})"
+            )
+        if isinstance(comparison, dict):
+            valid_winners = {"TIE"} | {
+                name.removeprefix("version_").upper() for name in mapped_names
+            }
+            if str(comparison.get("winner", "")).upper() not in valid_winners:
+                errors.append(
+                    f"{scenario_name} comparison winner must be one of {sorted(valid_winners)}"
+                )
+            compared = comparison.get("versions_compared")
+            expected_labels = sorted(
+                name.removeprefix("version_").upper() for name in mapped_names
+            )
+            if not isinstance(compared, list) or sorted(compared) != expected_labels:
+                errors.append(
+                    f"{scenario_name} comparison versions_compared must equal {expected_labels}"
+                )
 
         for version in version_names:
             version_dir = scenario_dir / version
