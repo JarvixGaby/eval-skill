@@ -10,6 +10,26 @@
 和直接让 Agent 做相比，这个 Skill 是否真的改善了结果？或者两个候选 Skill 谁更好？
 ```
 
+## eval-skills 是什么？
+
+**eval-skills 是一个开源 Agent Skill，用于验证某个 AI Agent Skill 是否能在真实任务中改善结果。** 它会根据一个或多个目标 Skill 创建小型基准测试，运行“Skill 对裸 Agent”或“Skill 对 Skill”对比，对输出评分，并生成一份静态并排 HTML 报告。
+
+| 问题 | 答案 |
+| --- | --- |
+| 它解决什么问题？ | 用可复核的任务结果评估 Skill 的实际价值，而不是只看介绍或演示。 |
+| 适合谁？ | 构建、安装、比较或审查可复用 Agent Skill 的开发者和 AI Agent 使用者。 |
+| 可以比较什么？ | 一个目标 Skill 与裸 Agent 的对比，或两个及以上候选 Skill 的对比。 |
+| 会产出什么？ | 场景数据、带评分的运行结果、聚合基准指标和 `comparison_report.html`。 |
+| 怎么保证比较可读？ | 标准模式下，每个配置运行三次；输出会先匿名对比，再揭示配置身份。 |
+| 它不承诺什么？ | 评估结果只对已测试的场景和设置构成证据，不证明 Skill 在所有任务中都更好。 |
+
+### 可核验事实
+
+- 目标来源可以是 GitHub 仓库、本地 Skill 目录、`.skill` 压缩包、安装命令、粘贴的 Skill 文件或已注册 Skill 名称。
+- 默认将目标 Skill 复制或克隆到隔离 workspace，减少配置之间相互污染。
+- 生成文件放在 `temp/` 中，最终用户可查看的交付物是静态 HTML 对比报告。
+- 默认不允许外部副作用；涉及真实系统改动时，应使用 sandbox 或 dry-run，除非用户明确批准。
+
 ## 安装方式
 
 ### 让 Agent 帮你安装
@@ -241,3 +261,21 @@ python3 scripts/generate_comparison_report.py <workspace>/temp \
 - 默认避免外部副作用。如果目标 Skill 会发邮件、部署服务、写入 SaaS、购买、删除或改变真实状态，除非用户明确批准，否则使用 sandbox 或 dry-run 场景。
 - 这个 Skill 产出的是证据，不是绝对结论。报告应清楚写明 blind level、limitations 和 residual risks。
 - 最终报告是静态 HTML，可以本地打开，也可以作为 artifact 分享。
+
+## 常见问题
+
+### baseline 对比和 skill-vs-skill 对比有什么区别？
+
+baseline 对比让目标 Skill 与未使用该 Skill 的同一 Agent 对比。skill-vs-skill 对比让两个或多个候选 Skill 直接比较，不包含裸 Agent。
+
+### 每个场景会运行几次？
+
+标准采样模式对每个配置运行三次。报告保留全部运行结果，不只展示表现最好的一次。
+
+### 能评估一个尚未安装的 GitHub Skill 吗？
+
+可以。公开 GitHub 仓库 URL 是支持的目标来源；工作流可将目标隔离为本地工件，而不必全局安装。
+
+### 正向报告是否证明某个 Skill 在任何情况下都更好？
+
+不是。结果受测试场景、输入、模型环境、评分标准和已记录限制约束；它只是该评估设置下的证据。

@@ -11,6 +11,26 @@ The goal is not to prove a skill's claims. The goal is to answer a practical
 question: "Does this skill help on realistic tasks compared with asking the
 agent directly, or does one candidate skill outperform another?"
 
+## What is eval-skills?
+
+**eval-skills is an open-source agent skill for evaluating whether an AI-agent skill improves outcomes on realistic tasks.** It creates a small benchmark from one or more target skills, runs a baseline comparison or skill-vs-skill comparison, grades the resulting outputs, and produces one static side-by-side HTML report.
+
+| Question | Answer |
+| --- | --- |
+| What problem does it solve? | It helps teams test a skill's practical value instead of relying only on its description or demo. |
+| Who is it for? | Developers and AI-agent users who build, install, compare, or review reusable agent skills. |
+| What can it compare? | One target skill against a naked-agent baseline, or two or more candidate skills against each other. |
+| What does it produce? | Scenario data, graded runs, aggregate benchmark metrics, and `comparison_report.html`. |
+| How are comparisons made? | Standard mode uses three runs per configuration and blinded output comparison before identities are revealed. |
+| What does it not claim? | An evaluation is evidence for the tested scenarios and setup; it is not proof that a skill is universally better. |
+
+### Key facts
+
+- Target inputs can be a GitHub repository, local skill directory, `.skill` archive, install command, pasted skill files, or an already registered skill name.
+- Target skills are copied or cloned into an isolated workspace by default to reduce configuration contamination.
+- Generated artifacts are kept in `temp/`; the final user-facing deliverable is a static HTML comparison report.
+- External side effects are disabled by default. Use sandbox or dry-run scenarios unless live actions are explicitly approved.
+
 ## Installation
 
 ### Ask An Agent To Install It
@@ -293,3 +313,21 @@ python3 scripts/generate_comparison_report.py <workspace>/temp \
   its blind level, limitations, and residual risks.
 - The final report is static HTML and can be opened locally or shared as an
   artifact.
+
+## FAQ
+
+### What is the difference between a baseline comparison and a skill-vs-skill comparison?
+
+A baseline comparison evaluates a target skill against the same agent working without that skill. A skill-vs-skill comparison evaluates two or more candidate skills without including a naked baseline.
+
+### How many times does eval-skills run each scenario?
+
+The standard sampling mode runs each scenario three times for every configuration. The report keeps all runs visible rather than showing only a best result.
+
+### Can I evaluate an uninstalled skill from GitHub?
+
+Yes. A public GitHub repository URL is a supported target source. The workflow can isolate the target as a local artifact instead of globally installing it.
+
+### Does a positive report prove that a skill is always better?
+
+No. The result is bounded by the selected scenarios, inputs, model environment, grading rubric, and recorded limitations. It is evidence for that evaluation setup.
